@@ -1,0 +1,72 @@
+// mutation cartLinesUpdate($cartId: ID!, $lines: [CartLineUpdateInput!]!) {
+// 	cartLinesUpdate(cartId: $cartId, lines: $lines) {
+// 	  cart {
+// 		attributes {
+// 		  key
+// 		  value
+// 		}
+// 		id
+// 		lines(first: 10) {
+// 		  nodes {
+// 			attributes {
+// 			  key
+// 			  value
+// 			}
+// 			id
+// 		  }
+// 		}
+// 	  }
+// 	  userErrors {
+// 		field
+// 		message
+// 	  }
+// 	}
+//   }
+
+// variables
+// {
+// 	"cartId": "gid://shopify/Cart/c1-499175c13a4654a23df7304db0be1f9a",
+// 	"lines": [
+// 	  {
+// 		"attributes": [
+// 		  {
+// 			"key": "preorder-test",
+// 			"value": "test!"
+// 		  }
+// 		],
+// 		"id": "gid://shopify/CartLine/5af809e1-b627-4dd5-8cee-718cf4bc89a6?cart=c1-499175c13a4654a23df7304db0be1f9a"
+// 	  }
+// 	]
+//   }
+
+
+// const variantQuery = `{
+// 	nodes(ids: ${ids}) {
+// 		... on ProductVariant {
+// 			id
+// 			availableForSale
+// 			product {
+// 				id
+// 				title
+// 			}
+// 			quantityAvailable
+// 			currentlyNotInStock
+// 		}
+// 	}
+// 	cart(id: "${cart_id}") {
+// 		id
+// 		lines(first: 50) {
+// 		  nodes {
+// 			id
+// 			merchandise {
+// 			  ... on ProductVariant {
+// 				id
+// 				product {
+// 				  title
+// 				}
+// 			  }
+// 			}
+// 		  }
+// 		}
+// 	}
+// }`;
