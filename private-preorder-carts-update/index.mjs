@@ -7,7 +7,7 @@ export const handler = async (event) => {
 	// console.log('event', event);
 	const shop_domain = event?.shopify_domain;
 	const line_items = event?.line_items;
-	const cart_id = 'gid://shopify/Cart/' + event?.id; // hopefully?????????
+	const cart_id = 'gid://shopify/Cart/' + event?.id;
 
 	const getStorefrontUrl = 'https://coi5iaiiw0.execute-api.ap-northeast-1.amazonaws.com/getStorefrontDev';
 	const getStorefrontReqestBody = {};
@@ -18,7 +18,6 @@ export const handler = async (event) => {
 	var storefrontAccessToken = null;
 	try {
 		storefrontAccessRes = await axios.post(getStorefrontUrl, getStorefrontReqestBody);
-		// console.log('STOREFRONT -', storefrontAccessRes?.data?.body);
 		storefrontAccessRes = storefrontAccessRes?.data?.body;
 		if (storefrontAccessRes && storefrontAccessRes.length > 0 && storefrontAccessRes[0]?.storefront_key) {
 			storefrontAccessToken = storefrontAccessRes[0]?.storefront_key;
@@ -45,9 +44,6 @@ export const handler = async (event) => {
 		item_id_list.push('gid://shopify/ProductVariant/' + item.variant_id);
 		line_quantity['gid://shopify/ProductVariant/' + item.variant_id] = Number(item.quantity);
 	});
-	// var ids = JSON.stringify(item_id_list);
-	console.log('item_id_list.length', item_id_list.length);
-	console.log('Object.keys(line_quantity).length', Object.keys(line_quantity).length);
 
 	const variantQuery = `{
 		cart(id: "${cart_id}") {
@@ -74,8 +70,6 @@ export const handler = async (event) => {
 			}
 		}
 	}`;
-	// check deliveryGroups later
-	console.log(variantQuery);
 
 	// Get Cart lines
 	var res;
@@ -100,11 +94,37 @@ export const handler = async (event) => {
 	const responseData = res?.data;
 	// Cart lines
 	const cart_lines = responseData?.data?.cart?.lines?.nodes;
-	console.log('cart_lines', cart_lines);
+	console.log('cart_lines from graphql', cart_lines);
+	if (!cart_lines || (cart_lines && cart_lines.length === 0)) {
+		// No cart data
+		return response;
+	}
+
+	// Get inventory_policy
+	const getProductVariantUrl = 'https://gye30h0z9f.execute-api.ap-northeast-1.amazonaws.com/getProductVariant';
+	let products = cart_lines.map(line => {
+		return {
+			variant_id: line?.merchandise?.id,
+			product_id: line?.merchandise?.product?.id
+		};
+	});
+	let getProductReqestBody = {
+		shopify_domain: shop_domain,
+		products: products,
+		inventory_policy: 'continue'
+	};
+	console.log('GET PRODUCT VARIANT: ', getProductReqestBody);
+	var preorderProductList = [];
+	try {
+		let getProductReqestRes = await axios.post(getProductVariantUrl, getProductReqestBody);
+		preorderProductList = getProductReqestRes?.data?.body;
+	} catch(e) {
+		console.error('Failed getStorefrontAccess');
+		console.error(e);
+	}
 
 	// Create Cart Line update body
-	var cart_line_update_body = createCartLineUpdateBody(cart_id, cart_lines, line_quantity);
-
+	var cart_line_update_body = createCartLineUpdateBody(cart_id, cart_lines, line_quantity, preorderProductList);
 	if (cart_line_update_body === null) {
 		// No update data
 		return response;
@@ -119,6 +139,7 @@ export const handler = async (event) => {
 			}
 		});
 		if (!res?.data) throw res;
+		console.log(res?.data);
 		// product id -> gid://shopify/Product/ + number
 	} catch(e) {
 		console.error('Failed storefront api');
@@ -133,37 +154,49 @@ export const handler = async (event) => {
 	return response;
 };
 
-function createCartLineUpdateBody(cart_id, cart_lines, line_quantity) {
+function createCartLineUpdateBody(cart_id, cart_lines, line_quantity, preorderProductList) {
 	let cart_line_update_variables = {};
 	let cart_update_lines = [];
 	cart_lines.forEach(line => {
-		if (line.merchandise.availableForSale
-			&& Number(line.merchandise.quantityAvailable) <= 0 && line.merchandise.currentlyNotInStock // inventory_policy === 'CONTINUE' && line_quantity[line.merchandise.id] >= Number(line.merchandise.quantityAvailable)
-		) {
-			let input_line = {};
-			let attribute_update_flg = false;
-			let attribute_key = 'Preorder';
-			// check line.attributes here 09/22
-			input_line['attributes'] = line.attributes;
-			if (line.attributes && line.attributes.length > 0) {
-				line.attributes.forEach((att, index) => {
-					if (att.key === attribute_key) {
-						line.attributes[index].value = String(line_quantity[line.merchandise.id]);
-						attribute_update_flg = true;
-					}
-				})
+		// check if it's Keep selling when out of stock
+		let preorderProduct = preorderProductList.filter(product => product.product_id === line?.merchandise?.product?.id && product.variant_id === line?.merchandise?.id && product.inventory_policy === 'continue');
+		let isPreorderProduct = preorderProduct && preorderProduct.length > 0 && line.merchandise.availableForSale;
+		
+		// Count pre-order quantity
+		let preorderQuantity = 0;
+		if (isPreorderProduct && line_quantity[line.merchandise.id] > Number(line.merchandise.quantityAvailable)) {
+			if (Number(line.merchandise.quantityAvailable) <= 0) {
+				preorderQuantity = line_quantity[line.merchandise.id];
+			} else {
+				preorderQuantity = line_quantity[line.merchandise.id] - Number(line.merchandise.quantityAvailable);
 			}
-			if (!attribute_update_flg) {
-				input_line['attributes'].push(
-					{
-						key: attribute_key,
-						value: String(line_quantity[line.merchandise.id])
-					}
-				);
-			}
-			input_line['id'] = line.id;
-			cart_update_lines.push(input_line);
 		}
+
+		// Sort out cart attributes
+		let input_line = {};
+		input_line['attributes'] = [];
+		let attribute_key = 'Pre-order';
+		if (line.attributes && line.attributes.length > 0) {
+			line.attributes.forEach((att) => {
+				if (att.key !== attribute_key) {
+					// push other attributes
+					input_line['attributes'].push(att);
+				}
+			});
+		}
+		if (preorderQuantity > 0) {
+			// attribute for Pre-order
+			input_line['attributes'].push(
+				{
+					key: attribute_key,
+					value: String(preorderQuantity)
+				}
+			);
+		}
+		// if (input_line['attributes'].length > 0) {
+		input_line['id'] = line.id;
+		cart_update_lines.push(input_line);
+		// }
 	});
 
 	// No update data
